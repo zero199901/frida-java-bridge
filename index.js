@@ -18,6 +18,53 @@ import VM from './lib/vm.js';
 import { checkJniResult } from './lib/result.js';
 
 const jsizeSize = 4;
+
+function readProcessName () {
+  try {
+    const cmdline = File.readAllText('/proc/self/cmdline');
+    const nul = cmdline.indexOf('\u0000');
+    const name = (nul === -1) ? cmdline : cmdline.substring(0, nul);
+    if (name.length !== 0)
+      return name;
+  } catch (e) {
+  }
+  try {
+    const status = File.readAllText('/proc/self/status');
+    const match = /^Name:\s*(.+)$/m.exec(status);
+    if (match !== null)
+      return match[1].trim();
+  } catch (e) {
+  }
+  return '';
+}
+
+function hasControlFile (mode, processName) {
+  if (processName.length === 0)
+    return false;
+  const paths = [
+    '/data/local/tmp/.java-bridge-' + mode + '.d/' + processName,
+    '/data/local/tmp/java-bridge-' + mode + '.d/' + processName,
+    '/data/local/tmp/.frida-java-bridge-' + mode + '.d/' + processName,
+    '/data/local/tmp/frida-java-bridge-' + mode + '.d/' + processName
+  ];
+  for (const path of paths) {
+    try {
+      File.readAllText(path);
+      return true;
+    } catch (e) {
+    }
+  }
+  return false;
+}
+
+function isProcessDenied () {
+  const processName = readProcessName();
+  if (processName.length === 0)
+    return false;
+  if (hasControlFile('force', processName))
+    return false;
+  return hasControlFile('deny', processName);
+}
 const pointerSize = Process.pointerSize;
 
 class Runtime {
@@ -35,6 +82,16 @@ class Runtime {
   ACC_SYNTHETIC    = 0x1000;
 
   constructor () {
+    if (isProcessDenied()) {
+      this.classFactory = null;
+      this.ClassFactory = ClassFactory;
+      this.vm = null;
+      this.api = null;
+      this._initialized = false;
+      this._apiError = new Error('Java bridge disabled for this process');
+      return;
+    }
+
     this.classFactory = null;
     this.ClassFactory = ClassFactory;
     this.vm = null;
